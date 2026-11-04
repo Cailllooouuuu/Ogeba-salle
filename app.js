@@ -4,7 +4,7 @@
 
 const SUPABASE = 'https://axadkutmrggmmtluiolo.supabase.co';
 const CLE_API = 'sb_publishable_gmYgDG_Y8Q4jZvS_aMDq9w__oNBx11A'; // clé publique, faite pour être dans une page web
-const VERSION = '1.0';
+const VERSION = '1.1';
 const HEURE_DEBUT = 7, HEURE_FIN = 20, PAS = 30;
 
 const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -250,7 +250,7 @@ function emailDe(nom) { const u = etat.d.utilisateurs.find(x => memeNom(x.nom, n
 function evenements(debut, fin) {
   const groupes = new Map();
   for (const r of etat.d.reservations) {
-    if (r.conge || r.type === 'site' || r.f <= debut || r.d >= fin) continue;
+    if (r.conge || presence(r) || r.f <= debut || r.d >= fin) continue;
     const cle = r.groupe || r.id;
     if (!groupes.has(cle)) groupes.set(cle, []);
     groupes.get(cle).push(r);
@@ -282,9 +282,16 @@ function congesDu(d) {
   const debut = debutJour(d), fin = ajouterJours(debut, 1);
   return etat.d.reservations.filter(r => r.conge && r.d < fin && r.f > debut);
 }
+// Télétravail, ou longue journée sur un chantier, sans invités : une simple présence, montrée dans le bandeau du jour.
+// Un rendez-vous sur site (avec des invités, ou de moins de 6 h) reste une réunion dans le planning, comme sur le PC.
+function presence(r) {
+  if (r.type !== 'site') return false;
+  if (adresses(r.participants).length) return false;
+  return /t[ée]l[ée]travail/i.test(r.salle) || r.f - r.d >= 6 * 36e5;
+}
 function sitesDu(d) {
   const debut = debutJour(d), fin = ajouterJours(debut, 1);
-  return etat.d.reservations.filter(r => r.type === 'site' && r.d < fin && r.f > debut)
+  return etat.d.reservations.filter(r => presence(r) && r.d < fin && r.f > debut)
     .filter(r => !etat.filtre || (etat.filtre === '@moi' ? meConcerne(r) : memeNom(r.salle, etat.filtre)));
 }
 function anniversairesDu(d) {
@@ -471,7 +478,7 @@ function blocEvenement(ev, jour, hauteurHeure, compact) {
   const fond = m ? 'linear-gradient(135deg,' + m.map(x => melanger(x, 0.72)).join(',') + ')' : melanger(c, 0.8);
   const barre = m ? 'linear-gradient(' + m.map((x, i) => x + ' ' + (i * 100 / m.length) + '% ' + ((i + 1) * 100 / m.length) + '%').join(',') + ')' : c;
   const projet = ev.r.objet && ev.r.objet.trim() ? ev.r.objet : ev.r.salle;
-  const lieux = ev.lieux.map(l => estVehicule(l) ? '🚗 ' + l.replace(/^voiture\s+/i, '') : l).join(' + ');
+  const lieux = ev.lieux.map(l => estVehicule(l) ? '🚗 ' + l.replace(/^voiture\s+/i, '') : estPartage(l) ? (/t[ée]l[ée]travail/i.test(l) ? '🏠 ' : '🏗️ ') + l : l).join(' + ');
   const court = hauteur < 40;
   let html = '<button class="evt' + (court ? ' court' : '') + (pas && ev.col ? ' empile' : '') + (meConcerne(ev.r) ? ' moi' : '') + '" data-action="details" data-id="' + h(ev.r.id) + '" style="top:' + haut.toFixed(1) + 'px;height:' + hauteur.toFixed(1) + 'px;left:calc(' + gauche.toFixed(2) + '% + 2px);width:calc(' + largeur.toFixed(2) + '% - 4px);z-index:' + (2 + ev.col) + ';background:' + fond + ';--barre:' + barre + '">';
   html += '<b>' + h(projet) + '</b>';
@@ -553,12 +560,12 @@ function apresPlanning(defilement) {
 
 function pageMesReunions() {
   const maintenant = new Date();
-  const miennes = etat.d.reservations.filter(r => !r.conge && r.type !== 'site' && r.f >= maintenant && meConcerne(r));
+  const miennes = etat.d.reservations.filter(r => !r.conge && !presence(r) && r.f >= maintenant && meConcerne(r));
   const groupes = new Map();
   for (const r of miennes) { const cle = r.groupe || r.id; if (!groupes.has(cle)) groupes.set(cle, []); groupes.get(cle).push(r); }
   const evs = [...groupes.values()].map(l => { const r = l.find(x => !estVehicule(x.salle)) || l[0]; return { r, lignes: l, d: r.d, f: r.f, lieux: [...new Set(l.map(x => x.salle))] }; }).sort((a, b) => a.d - b.d);
   const conges = etat.d.reservations.filter(r => r.conge && r.f >= maintenant && estMoi(r)).sort((a, b) => a.d - b.d);
-  const sites = etat.d.reservations.filter(r => r.type === 'site' && r.f >= maintenant && meConcerne(r)).sort((a, b) => a.d - b.d);
+  const sites = etat.d.reservations.filter(r => presence(r) && r.f >= maintenant && meConcerne(r)).sort((a, b) => a.d - b.d);
   let html = '<header class="entete"><div class="entete-ligne" style="padding-bottom:10px"><img class="entete-logo" src="icones/icone-192.png" alt=""><div class="entete-titre"><b>Mes réunions</b><span>' + h(etat.d.moi.nom) + '</span></div><button class="bouton-rond" data-action="actualiser" aria-label="Actualiser">' + ICONES.actualiser + '</button></div></header>' + bandeauReseau() + '<div class="page">';
   if (!evs.length && !conges.length && !sites.length) {
     html += '<div class="vide"><b>Rien de prévu</b>Les réunions que vous organisez, et celles où l\'on vous invite, apparaîtront ici.</div>';
@@ -876,7 +883,7 @@ function dessinerFormulaire() {
   html += '<div class="champ"><span class="libelle">Lieu</span><div class="lieux" id="lieux"></div></div>';
   html += '<div class="champ"><span class="libelle">Date et heure</span><input type="date" data-champ="jour" value="' + form.jour + '"><div class="plage"><select data-champ="debut" aria-label="Début">' + opt(heures.slice(0, -1), form.debut) + '</select><span>à</span><select data-champ="fin" aria-label="Fin">' + opt(heures.slice(1), form.fin) + '</select></div></div>';
   html += '<div id="verdict"></div>';
-  const projets = [...new Set(etat.d.reservations.filter(r => !r.conge && r.objet && r.type !== 'site').map(r => r.objet.trim()))].sort((a, b) => a.localeCompare(b));
+  const projets = [...new Set(etat.d.reservations.filter(r => !r.conge && r.objet && !presence(r)).map(r => r.objet.trim()))].sort((a, b) => a.localeCompare(b));
   html += '<div class="champ"><label class="libelle" for="objet">Projet</label><input type="text" id="objet" data-champ="objet" list="projets" value="' + h(form.objet) + '" placeholder="Nom du projet ou de la réunion" autocomplete="off"><datalist id="projets">' + projets.map(p => '<option value="' + h(p) + '">').join('') + '</datalist></div>';
   const voitures = vehicules();
   if (voitures.length) {
@@ -988,7 +995,7 @@ function bilan() {
     const autres = etat.d.reservations.filter(r => r.conge && estMoi(r) && r.d < f && d < r.f && !(idsModifies() && idsModifies().has(r.id)));
     if (autres.length) return { niveau: 'non', titre: 'Déjà en congé ' + periodeConge(autres[0]) + '.', lignes: [], possible: false };
     const n = joursConge(d, f);
-    const pendant = etat.d.reservations.filter(r => !r.conge && r.type !== 'site' && meConcerne(r) && r.d < f && d < r.f);
+    const pendant = etat.d.reservations.filter(r => !r.conge && !presence(r) && meConcerne(r) && r.d < f && d < r.f);
     const lignes = [periodeConge({ d, f })];
     if (pendant.length) lignes.push((pendant.length > 1 ? pendant.length + ' réunions' : 'Une réunion') + ' pendant ce congé : ' + pendant.slice(0, 3).map(r => (r.objet || r.salle) + ' (' + texteJour(r.d, true) + ')').join(', '));
     if (n <= 0) return { niveau: 'attention', titre: 'Aucun jour ouvré : ce sont des jours de week-end ou fériés.', lignes, possible: true };
