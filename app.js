@@ -4,7 +4,7 @@
 
 const SUPABASE = 'https://axadkutmrggmmtluiolo.supabase.co';
 const CLE_API = 'sb_publishable_gmYgDG_Y8Q4jZvS_aMDq9w__oNBx11A'; // clé publique, faite pour être dans une page web
-const VERSION = '1.2';
+const VERSION = '1.3';
 const HEURE_DEBUT = 7, HEURE_FIN = 20, PAS = 30;
 
 const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -245,6 +245,35 @@ function couleurSalle(nom) {
 // Le mode du PC (« Colorer par » salle ou organisateur), sauf si la personne en a choisi un autre sur le téléphone.
 const modePC = () => (etat.d && etat.d.mesCouleurs.mode === 'organisateur' ? 'personne' : 'salle');
 const modeCouleur = () => (etat.modeCouleurs === 'salle' || etat.modeCouleurs === 'personne' ? etat.modeCouleurs : modePC());
+// Filtres du planning, comme la légende du PC : une salle (mode Salles), ou une personne « @p:Nom » (mode Personnes), ou « @moi ».
+const personneChoisie = () => (etat.filtre && etat.filtre.indexOf('@p:') === 0 ? etat.filtre.slice(3) : null);
+const personneFiltree = () => (etat.filtre === '@moi' ? etat.d.moi.nom : personneChoisie());
+const salleFiltree = () => (etat.filtre && etat.filtre[0] !== '@' ? etat.filtre : null);
+function passeFiltre(r) {
+  if (!etat.filtre) return true;
+  if (etat.filtre === '@moi') return meConcerne(r);
+  const p = personneChoisie();
+  return p ? concerne(r, p, emailDe(p).toLowerCase()) : memeNom(r.salle, etat.filtre);
+}
+// Un filtre qui ne va pas avec le mode (une salle en mode Personnes…) est retiré, comme sur le PC quand on change de mode.
+function filtreSelonMode() {
+  const parPersonne = modeCouleur() === 'personne';
+  if ((parPersonne && salleFiltree()) || (!parPersonne && personneChoisie())) { etat.filtre = ''; memo.ecrire('filtre', ''); }
+}
+function changerModeCouleurs(mode, depuisBascule) {
+  // Depuis la bascule du planning, revenir au mode du PC, c'est de nouveau suivre le PC.
+  etat.modeCouleurs = depuisBascule && mode === modePC() ? '' : mode;
+  memo.ecrire('modeCouleurs', etat.modeCouleurs || null);
+  filtreSelonMode();
+  afficher();
+}
+// Comme la légende du PC : les personnes qui ont réservé ces deux derniers mois ou qui ont une réunion à venir, et les collègues qui ont un compte.
+function personnesLegende() {
+  const depuis = ajouterJours(aujourdhui(), -60), vus = new Map();
+  const noms = etat.d.reservations.filter(r => !r.conge && r.f >= depuis).map(r => r.organisateur).concat(etat.d.utilisateurs.map(u => u.nom));
+  for (const n of noms) { const t = String(n || '').trim(); if (t && !vus.has(t.toLowerCase())) vus.set(t.toLowerCase(), t); }
+  return [...vus.values()].sort((a, b) => a.localeCompare(b, 'fr', { sensitivity: 'base' }));
+}
 const estVehicule = nom => { const s = etat.d.salleDe.get(String(nom || '').toLowerCase()); return !!s && s.type === 'vehicule'; };
 const memeNom = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 const adresses = p => String(p || '').split(/[;, ]+/).map(a => a.trim()).filter(a => a.indexOf('@') > 0);
@@ -280,15 +309,15 @@ function evenements(debut, fin) {
   return liste.filter(filtrer).sort((a, b) => a.d - b.d || b.f - a.f);
 }
 function filtrer(ev) {
-  if (!etat.filtre) return true;
-  if (etat.filtre === '@moi') return ev.lignes.some(meConcerne);
-  return ev.lignes.some(x => memeNom(x.salle, etat.filtre));
+  return ev.lignes.some(passeFiltre);
 }
 function couleurDe(ev) {
-  return modeCouleur() === 'personne' ? couleurPersonne(ev.r.organisateur) : couleurSalle(ev.r.salle);
+  if (modeCouleur() !== 'personne') return couleurSalle(ev.r.salle);
+  // La personne choisie donne sa couleur à toutes ses réunions, celles qu'elle organise comme celles où elle est invitée (CouleurPlanning).
+  return couleurPersonne(personneFiltree() || ev.r.organisateur);
 }
 function melange(ev) { // couleurs de l'organisateur et des invités (mode Personnes)
-  if (modeCouleur() !== 'personne') return null;
+  if (modeCouleur() !== 'personne' || personneFiltree()) return null;
   const c = [couleurPersonne(ev.r.organisateur)];
   for (const p of invites(ev.r)) if (p.compte) { const x = couleurPersonne(p.nom); if (c.indexOf(x) < 0) c.push(x); }
   return c.length > 1 ? c.slice(0, 5) : null;
@@ -309,7 +338,7 @@ function presence(r) {
 function sitesDu(d) {
   const debut = debutJour(d), fin = ajouterJours(debut, 1);
   return etat.d.reservations.filter(r => presence(r) && r.d < fin && r.f > debut)
-    .filter(r => !etat.filtre || (etat.filtre === '@moi' ? meConcerne(r) : memeNom(r.salle, etat.filtre)));
+    .filter(passeFiltre);
 }
 function anniversairesDu(d) {
   return etat.d.anniversaires.filter(a => {
@@ -429,9 +458,17 @@ function pagePlanning() {
   else html += '<div style="height:10px"></div>';
 
   // Vue et filtres
-  html += '<div class="filtres"><button class="puce' + (!etat.filtre ? ' actif' : '') + '" data-action="filtre" data-filtre="">Tout</button>' +
+  // Comme sur le PC : la bascule Salles / Personnes colore le planning et change la liste qui suit.
+  filtreSelonMode();
+  const parPersonne = modeCouleur() === 'personne';
+  html += '<div class="filtres"><div class="bascule"><button class="' + (parPersonne ? '' : 'actif') + '" data-action="modeCouleurs" data-mode="salle">Salles</button><button class="' + (parPersonne ? 'actif' : '') + '" data-action="modeCouleurs" data-mode="personne">Personnes</button></div>' +
+    '<button class="puce' + (!etat.filtre ? ' actif' : '') + '" data-action="filtre" data-filtre="">Tout</button>' +
     '<button class="puce' + (etat.filtre === '@moi' ? ' actif' : '') + '" data-action="filtre" data-filtre="@moi"><i style="background:' + couleurPersonne(etat.d.moi.nom) + '"></i>Mes réunions</button>';
-  for (const s of etat.d.salles) html += '<button class="puce' + (memeNom(etat.filtre, s.nom) ? ' actif' : '') + '" data-action="filtre" data-filtre="' + h(s.nom) + '"><i style="background:' + h(couleurSalle(s.nom)) + '"></i>' + h(s.nom) + '</button>';
+  if (parPersonne) {
+    for (const n of personnesLegende()) if (!memeNom(n, etat.d.moi.nom)) html += '<button class="puce' + (memeNom(personneChoisie(), n) ? ' actif' : '') + '" data-action="filtre" data-filtre="@p:' + h(n) + '"><i style="background:' + h(couleurPersonne(n)) + '"></i>' + h(n) + '</button>';
+  } else {
+    for (const s of etat.d.salles) html += '<button class="puce' + (memeNom(etat.filtre, s.nom) ? ' actif' : '') + '" data-action="filtre" data-filtre="' + h(s.nom) + '"><i style="background:' + h(couleurSalle(s.nom)) + '"></i>' + h(s.nom) + '</button>';
+  }
   html += '</div></header>' + bandeauReseau();
 
   html += etat.vue === 'jour' ? vueJour() : vueSemaine(jours);
@@ -446,8 +483,9 @@ function bandeauJour(d) {
     html += '<div class="fete" style="background:linear-gradient(120deg,' + t[1] + ',' + t[2] + ')"><span class="emoji">' + t[0] + '</span><div><b>' + h(sp.titre || 'Jour bloqué') + '</b><span>' + (sp.ferie ? 'Jour férié · pas de réservation' : sp.bloque ? 'Pas de réservation ce jour-là' : '') + '</span></div></div>';
   }
   const etiquettes = [];
-  for (const nom of anniversairesDu(d)) etiquettes.push('<span class="etiquette anniv"><span>🎂</span><span>Anniversaire de <b>' + h(nom) + '</b></span></span>');
-  for (const r of congesDu(d).sort((a, b) => a.organisateur.localeCompare(b.organisateur))) {
+  const choisie = personneChoisie();
+  for (const nom of anniversairesDu(d).filter(n => !choisie || memeNom(n, choisie))) etiquettes.push('<span class="etiquette anniv"><span>🎂</span><span>Anniversaire de <b>' + h(nom) + '</b></span></span>');
+  for (const r of congesDu(d).filter(r => !choisie || memeNom(r.organisateur, choisie)).sort((a, b) => a.organisateur.localeCompare(b.organisateur))) {
     const part = partConge(r, d);
     etiquettes.push('<button class="etiquette" data-action="details" data-id="' + h(r.id) + '"><span class="avatar" style="background:' + couleurPersonne(r.organisateur) + '">' + h(initiales(r.organisateur)) + '</span><span>' + h(r.organisateur) + '</span><small>🌴 Congé' + (part ? ' (' + part + ')' : '') + '</small></button>');
   }
@@ -573,6 +611,9 @@ function apresPlanning(defilement) {
   } else window.scrollTo(0, defilement);
   const tete = $('.entetes-semaine');
   if (tete) tete.style.top = $('.entete').offsetHeight + 'px';
+  // La salle ou la personne choisie reste visible dans la liste qui défile.
+  const filtres = $('.filtres'), actif = filtres && filtres.querySelector('.puce.actif');
+  if (actif && actif.dataset.filtre) filtres.scrollLeft += actif.getBoundingClientRect().left - filtres.getBoundingClientRect().left - (filtres.clientWidth - actif.offsetWidth) / 2;
 }
 
 function pageMesReunions() {
@@ -857,7 +898,8 @@ function ouvrirReservation(options) {
     debut = memeJour(jour, aujourdhui()) ? Math.ceil((m.getHours() * 60 + m.getMinutes() + 1) / PAS) * PAS : 9 * 60;
   }
   debut = Math.max(HEURE_DEBUT * 60, Math.min(HEURE_FIN * 60 - PAS, debut));
-  const salleFiltre = etat.filtre && etat.filtre !== '@moi' && !estVehicule(etat.filtre) ? etat.d.salles.find(s => memeNom(s.nom, etat.filtre)) : null;
+  const sf = salleFiltree();
+  const salleFiltre = sf && !estVehicule(sf) ? etat.d.salles.find(s => memeNom(s.nom, sf)) : null;
   form = {
     mode: 'reunion', modif: null,
     salle: salleFiltre ? salleFiltre.nom : (lieuxReservables()[0] || {}).nom,
@@ -1208,6 +1250,7 @@ const actions = {
   aujourdhui() { etat.jour = aujourdhui(); apresPlanning.fait = false; afficher(); },
   vue(el) { etat.vue = el.dataset.vue; memo.ecrire('vue', etat.vue); apresPlanning.fait = false; afficher(); },
   filtre(el) { etat.filtre = el.dataset.filtre; memo.ecrire('filtre', etat.filtre); afficher(); },
+  modeCouleurs(el) { changerModeCouleurs(el.dataset.mode, true); },
   actualiser() { toast('Mise à jour…'); charger(); },
   details(el, e) { e.stopPropagation(); ouvrirDetails(el.dataset.id); },
   vide(el, e) {
@@ -1220,7 +1263,7 @@ const actions = {
     etat.jour = jour;
     ouvrirReservation({ jour, heure: minutes });
   },
-  reserver() { ouvrirReservation({ mode: etat.filtre && /cong/i.test(etat.filtre) ? 'conge' : undefined }); },
+  reserver() { ouvrirReservation({ mode: /cong/i.test(salleFiltree() || '') ? 'conge' : undefined }); },
   fermer() { fermerFeuilles(); },
   mode(el) { form.mode = el.dataset.mode; dessinerFormulaire(); },
   lieu(el) { form.salle = el.dataset.salle; dessinerLieux(); verifier(); },
@@ -1282,7 +1325,7 @@ document.addEventListener('change', async e => {
       etat.d.reglages = r;
       toast('Enregistré', 'ok');
       afficher();
-    } else if (quoi === 'couleurs') { etat.modeCouleurs = el.value; memo.ecrire('modeCouleurs', el.value || null); afficher(); }
+    } else if (quoi === 'couleurs') changerModeCouleurs(el.value, false);
     else if (quoi === 'weekend') { etat.weekend = el.checked; memo.ecrire('weekend', el.checked ? 'oui' : 'non'); afficher(); }
   } catch (err) { toast(err.message, 'erreur'); afficher(); }
 });

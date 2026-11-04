@@ -117,6 +117,8 @@ a { color: var(--marque); }
 .bascule button.actif { background: var(--carte); color: var(--texte); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 .filtres { display: flex; gap: 6px; overflow-x: auto; padding: 0 16px 10px; margin: 0 -16px; scrollbar-width: none; }
 .filtres::-webkit-scrollbar { display: none; }
+.filtres .bascule { flex: none; padding: 2px; }
+.filtres .bascule button { padding: 5px 10px; font-size: 13px; }
 .puce {
   flex: none; display: inline-flex; align-items: center; gap: 6px;
   height: 32px; padding: 0 12px; border-radius: 16px; font-size: 13.5px;
