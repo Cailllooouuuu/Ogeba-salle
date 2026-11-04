@@ -4,7 +4,7 @@
 
 const SUPABASE = 'https://axadkutmrggmmtluiolo.supabase.co';
 const CLE_API = 'sb_publishable_gmYgDG_Y8Q4jZvS_aMDq9w__oNBx11A'; // clé publique, faite pour être dans une page web
-const VERSION = '1.3';
+const VERSION = '1.4';
 const HEURE_DEBUT = 7, HEURE_FIN = 20, PAS = 30;
 
 const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -349,6 +349,16 @@ function anniversairesDu(d) {
     return compte ? compte.nom : a.nom;
   });
 }
+// Anniversaires à montrer ce jour-là : sans le week-end, ceux du samedi et du dimanche passent au vendredi, comme sur le PC.
+// Avec une personne choisie dans les filtres, seulement le sien.
+function fetesDu(d) {
+  const liste = anniversairesDu(d).map(nom => ({ nom, quand: '' }));
+  if (!etat.weekend && d.getDay() === 5) {
+    for (const [decalage, quand] of [[1, ' (sam.)'], [2, ' (dim.)']]) for (const nom of anniversairesDu(ajouterJours(d, decalage))) liste.push({ nom, quand });
+  }
+  const choisie = personneChoisie();
+  return liste.filter(f => !choisie || memeNom(f.nom, choisie));
+}
 function partConge(r, d) {
   const debut = debutJour(d), midi = new Date(debut.getFullYear(), debut.getMonth(), debut.getDate(), 12), fin = ajouterJours(debut, 1);
   const matin = r.d < midi && r.f > debut, apres = r.f > midi && r.d < fin;
@@ -448,7 +458,7 @@ function pagePlanning() {
     const sp = jourSpecial(j);
     const mes = etat.d.reservations.some(r => !r.conge && r.d < ajouterJours(j, 1) && r.f > j && meConcerne(r));
     const conge = congesDu(j).some(r => estMoi(r));
-    const deco = sp && sp.bloque ? (THEMES[sp.theme] || ['⛔'])[0] : (anniversairesDu(j).length ? '🎂' : '');
+    const deco = sp && sp.bloque ? (THEMES[sp.theme] || ['⛔'])[0] : (fetesDu(j).length ? '🎂' : '');
     html += '<button class="jour-pastille' + (etat.vue === 'jour' && memeJour(j, etat.jour) ? ' choisi' : '') + (memeJour(j, aujourdhui()) ? ' aujourdhui' : '') + (sp && sp.bloque ? ' ferie' : '') + '" data-action="jour" data-jour="' + cleJour(j) + '">' +
       JOURS_COURTS[j.getDay()].replace('.', '') + '<b>' + j.getDate() + '</b>' +
       (deco ? '<span class="deco">' + deco + '</span>' : '') +
@@ -484,7 +494,7 @@ function bandeauJour(d) {
   }
   const etiquettes = [];
   const choisie = personneChoisie();
-  for (const nom of anniversairesDu(d).filter(n => !choisie || memeNom(n, choisie))) etiquettes.push('<span class="etiquette anniv"><span>🎂</span><span>Anniversaire de <b>' + h(nom) + '</b></span></span>');
+  for (const f of fetesDu(d)) etiquettes.push('<span class="etiquette anniv"><span>🎂</span><span>Anniversaire de <b>' + h(f.nom) + '</b>' + h(f.quand) + '</span></span>');
   for (const r of congesDu(d).filter(r => !choisie || memeNom(r.organisateur, choisie)).sort((a, b) => a.organisateur.localeCompare(b.organisateur))) {
     const part = partConge(r, d);
     etiquettes.push('<button class="etiquette" data-action="details" data-id="' + h(r.id) + '"><span class="avatar" style="background:' + couleurPersonne(r.organisateur) + '">' + h(initiales(r.organisateur)) + '</span><span>' + h(r.organisateur) + '</span><small>🌴 Congé' + (part ? ' (' + part + ')' : '') + '</small></button>');
@@ -578,13 +588,18 @@ function vueSemaine(jours) {
   const cols = 'repeat(' + jours.length + ',1fr)';
   let tete = '<div class="entetes-semaine" style="grid-template-columns:' + cols + ';top:0"><div class="nav-semaine"><button data-action="semaine" data-sens="-1" aria-label="Semaine précédente">' + ICONES.gauche + '</button><button data-action="semaine" data-sens="1" aria-label="Semaine suivante">' + ICONES.droite + '</button></div>';
   for (const j of jours) {
-    const marques = [];
+    const marques = [], mots = [];
     const sp = jourSpecial(j);
-    if (sp && sp.bloque) marques.push((THEMES[sp.theme] || ['⛔'])[0]);
-    if (anniversairesDu(j).length) marques.push('🎂');
-    const conges = congesDu(j);
+    // Sous le jour, le nom du férié (ou du jour bloqué) et les prénoms de ceux qui fêtent leur anniversaire.
+    if (sp && (sp.bloque || sp.titre)) {
+      const t = THEMES[sp.theme] || ['⛔', '#64748b', '#94a3b8'];
+      mots.push('<span class="mot fete" style="background:linear-gradient(120deg,' + t[1] + ',' + t[2] + ')">' + t[0] + ' ' + h(sp.titre || 'Jour bloqué') + '</span>');
+    }
+    for (const f of fetesDu(j)) mots.push('<span class="mot anniv">🎂 ' + h(prenom(f.nom)) + (f.quand ? ' <small>' + h(f.quand.trim()) + '</small>' : '') + '</span>');
+    const choisie = personneChoisie();
+    const conges = congesDu(j).filter(r => !choisie || memeNom(r.organisateur, choisie));
     for (const r of conges.slice(0, 4)) marques.push('<i style="background:' + couleurPersonne(r.organisateur) + '" title="' + h(r.organisateur) + '"></i>');
-    tete += '<button class="' + (memeJour(j, aujourdhui()) ? 'aujourdhui' : '') + '" data-action="jour" data-jour="' + cleJour(j) + '">' + JOURS_COURTS[j.getDay()].replace('.', '') + '<b>' + j.getDate() + '</b><span class="marques">' + marques.join('') + '</span></button>';
+    tete += '<button class="' + (memeJour(j, aujourdhui()) ? 'aujourdhui' : '') + '" data-action="jour" data-jour="' + cleJour(j) + '">' + JOURS_COURTS[j.getDay()].replace('.', '') + '<b>' + j.getDate() + '</b><span class="marques">' + marques.join('') + '</span>' + mots.join('') + '</button>';
   }
   tete += '</div>';
   let html = '<div class="grille-zone semaine-grille" data-zone="semaine">' + tete + '<div class="grille" style="--heure:' + HH + 'px">' + grilleHeures() + '<div class="colonnes" style="grid-template-columns:' + cols + ';left:52px">';
@@ -592,6 +607,7 @@ function vueSemaine(jours) {
     const evs = evenements(j, ajouterJours(j, 1));
     disposer(evs);
     html += '<div class="colonne' + (bloque(j) ? ' ferie' : '') + (memeJour(j, aujourdhui()) ? ' aujourdhui' : '') + '" data-action="vide" data-jour="' + cleJour(j) + '">';
+    if (bloque(j)) html += '<span class="titre-ferie">' + h(jourSpecial(j).titre || 'Jour bloqué') + '</span>';
     for (const ev of evs) html += blocEvenement(ev, j, HH, true);
     if (memeJour(j, aujourdhui())) html += ligneMaintenant(HH);
     html += '</div>';

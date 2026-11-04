@@ -1,6 +1,6 @@
 // OGEBA Salle : fonctionne hors connexion et affiche les notifications.
-const VERSION = 'ogeba-salle-1.3';
-const FICHIERS = ['./', 'index.html', 'style.css?v=2', 'app.js?v=4', 'manifest.webmanifest',
+const VERSION = 'ogeba-salle-1.4';
+const FICHIERS = ['./', 'index.html', 'style.css?v=3', 'app.js?v=5', 'manifest.webmanifest',
   'icones/icone-192.png', 'icones/icone-512.png', 'icones/badge-96.png', 'icones/logo-ogeba.png', 'icones/favicon-64.png'];
 
 self.addEventListener('install', e => {
