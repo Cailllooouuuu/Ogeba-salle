@@ -4,7 +4,7 @@
 
 const SUPABASE = 'https://axadkutmrggmmtluiolo.supabase.co';
 const CLE_API = 'sb_publishable_gmYgDG_Y8Q4jZvS_aMDq9w__oNBx11A'; // clé publique, faite pour être dans une page web
-const VERSION = '1.1';
+const VERSION = '1.2';
 const HEURE_DEBUT = 7, HEURE_FIN = 20, PAS = 30;
 
 const JOURS = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -130,7 +130,7 @@ const etat = {
   vue: memo.lire('vue') || 'jour',
   jour: aujourdhui(),
   filtre: memo.lire('filtre') || '',
-  couleurPar: memo.lire('couleurPar') || 'salle',
+  modeCouleurs: memo.lire('modeCouleurs') || '', // '' : comme sur le PC ; sinon 'salle' ou 'personne'
   weekend: memo.lire('weekend') === 'oui',
   installation: null,   // proposition d'installation d'Android (beforeinstallprompt)
   lienAgenda: null,
@@ -178,6 +178,10 @@ function preparer(brut) {
   };
   d.salleDe = new Map(d.salles.map(s => [s.nom.toLowerCase(), s]));
   d.couleurPerso = new Map(d.organisateurs.filter(o => o.couleur).map(o => [o.nom.toLowerCase(), o.couleur]));
+  // Couleurs que la personne a choisies pour elle-même sur son PC (Personnaliser) et son mode « Colorer par ».
+  const pc = brut.couleurs || {};
+  const carte = o => new Map(Object.keys(o || {}).map(k => [k.trim().toLowerCase(), o[k]]));
+  d.mesCouleurs = { mode: pc.mode || null, salles: carte(pc.salles), personnes: carte(pc.personnes) };
   d.nomParEmail = new Map(d.utilisateurs.filter(u => u.email).map(u => [u.email.trim().toLowerCase(), u.nom]));
   d.emailMoi = (d.moi.email || '').trim().toLowerCase();
   for (const j of brut.jours || []) d.jours.set(j.jour, j);
@@ -226,8 +230,21 @@ async function verifierVersion() {
 }
 
 // ---------- Règles de l'application Windows ----------
-const couleurPersonne = nom => (etat.d && etat.d.couleurPerso.get(String(nom || '').toLowerCase())) || couleurAuto(nom);
-function couleurSalle(nom) { const s = etat.d && etat.d.salleDe.get(String(nom || '').toLowerCase()); return (s && s.couleur) || couleurAuto(nom); }
+// Comme CouleursPerso : la couleur choisie par la personne sur son PC passe avant la couleur commune de l'équipe.
+function couleurPersonne(nom) {
+  const k = String(nom || '').trim().toLowerCase();
+  return (etat.d && (etat.d.mesCouleurs.personnes.get(k) || etat.d.couleurPerso.get(k))) || couleurAuto(nom);
+}
+function couleurSalle(nom) {
+  const k = String(nom || '').trim().toLowerCase();
+  const perso = etat.d && etat.d.mesCouleurs.salles.get(k);
+  if (perso) return perso;
+  const s = etat.d && etat.d.salleDe.get(k);
+  return (s && s.couleur) || couleurAuto(nom);
+}
+// Le mode du PC (« Colorer par » salle ou organisateur), sauf si la personne en a choisi un autre sur le téléphone.
+const modePC = () => (etat.d && etat.d.mesCouleurs.mode === 'organisateur' ? 'personne' : 'salle');
+const modeCouleur = () => (etat.modeCouleurs === 'salle' || etat.modeCouleurs === 'personne' ? etat.modeCouleurs : modePC());
 const estVehicule = nom => { const s = etat.d.salleDe.get(String(nom || '').toLowerCase()); return !!s && s.type === 'vehicule'; };
 const memeNom = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 const adresses = p => String(p || '').split(/[;, ]+/).map(a => a.trim()).filter(a => a.indexOf('@') > 0);
@@ -268,10 +285,10 @@ function filtrer(ev) {
   return ev.lignes.some(x => memeNom(x.salle, etat.filtre));
 }
 function couleurDe(ev) {
-  return etat.couleurPar === 'personne' ? couleurPersonne(ev.r.organisateur) : couleurSalle(ev.r.salle);
+  return modeCouleur() === 'personne' ? couleurPersonne(ev.r.organisateur) : couleurSalle(ev.r.salle);
 }
 function melange(ev) { // couleurs de l'organisateur et des invités (mode Personnes)
-  if (etat.couleurPar !== 'personne') return null;
+  if (modeCouleur() !== 'personne') return null;
   const c = [couleurPersonne(ev.r.organisateur)];
   for (const p of invites(ev.r)) if (p.compte) { const x = couleurPersonne(p.nom); if (c.indexOf(x) < 0) c.push(x); }
   return c.length > 1 ? c.slice(0, 5) : null;
@@ -414,7 +431,7 @@ function pagePlanning() {
   // Vue et filtres
   html += '<div class="filtres"><button class="puce' + (!etat.filtre ? ' actif' : '') + '" data-action="filtre" data-filtre="">Tout</button>' +
     '<button class="puce' + (etat.filtre === '@moi' ? ' actif' : '') + '" data-action="filtre" data-filtre="@moi"><i style="background:' + couleurPersonne(etat.d.moi.nom) + '"></i>Mes réunions</button>';
-  for (const s of etat.d.salles) html += '<button class="puce' + (memeNom(etat.filtre, s.nom) ? ' actif' : '') + '" data-action="filtre" data-filtre="' + h(s.nom) + '"><i style="background:' + h(s.couleur || couleurAuto(s.nom)) + '"></i>' + h(s.nom) + '</button>';
+  for (const s of etat.d.salles) html += '<button class="puce' + (memeNom(etat.filtre, s.nom) ? ' actif' : '') + '" data-action="filtre" data-filtre="' + h(s.nom) + '"><i style="background:' + h(couleurSalle(s.nom)) + '"></i>' + h(s.nom) + '</button>';
   html += '</div></header>' + bandeauReseau();
 
   html += etat.vue === 'jour' ? vueJour() : vueSemaine(jours);
@@ -634,7 +651,9 @@ function pageReglages() {
     '<p class="note">Le lien est personnel : il montre vos réunions et vos congés. Google Agenda peut mettre quelques heures à afficher les changements. <a href="#" data-action="agenda" data-cible="nouveau">Changer de lien</a></p></div>';
 
   html += '<div class="titre-section">Affichage</div><div class="carte">';
-  html += '<label class="reglage"><span class="icone">' + ICONES.palette + '</span><span class="texte"><b>Couleurs</b><span>Des réunions dans le planning</span></span><select data-change="couleurs"><option value="salle"' + (etat.couleurPar === 'salle' ? ' selected' : '') + '>Par salle</option><option value="personne"' + (etat.couleurPar === 'personne' ? ' selected' : '') + '>Par personne</option></select></label>';
+  const choixCouleurs = [['', 'Comme sur le PC'], ['salle', 'Par salle'], ['personne', 'Par personne']];
+  html += '<label class="reglage"><span class="icone">' + ICONES.palette + '</span><span class="texte"><b>Couleurs</b><span>' + (etat.modeCouleurs ? 'Choisies sur ce téléphone' : 'Comme sur votre PC : ' + (modePC() === 'personne' ? 'par personne' : 'par salle')) + '</span></span><select data-change="couleurs">' +
+    choixCouleurs.map(([v, t]) => '<option value="' + v + '"' + (etat.modeCouleurs === v ? ' selected' : '') + '>' + t + '</option>').join('') + '</select></label>';
   html += '<label class="reglage"><span class="icone">' + ICONES.planning + '</span><span class="texte"><b>Afficher le week-end</b><span>Samedi et dimanche dans la semaine</span></span><span class="interrupteur"><input type="checkbox" data-change="weekend"' + (etat.weekend ? ' checked' : '') + '><span></span></span></label></div>';
 
   html += '<div class="carte"><button class="reglage" data-action="deconnecter"><span class="icone" style="background:var(--danger-clair);color:var(--danger)">' + ICONES.sortie + '</span><span class="texte"><b>Déconnecter ce téléphone</b><span>Pour le reconnecter, il faudra un nouveau code du PC</span></span></button></div>';
@@ -774,7 +793,7 @@ function ouvrirDetails(id) {
       '<div class="detail-ligne">' + ICONES.horloge + '<div class="contenu">' + h(majuscule(periodeConge(r))) + '<small>' + String(joursConge(r.d, r.f)).replace('.', ',') + ' jour' + (joursConge(r.d, r.f) > 1 ? 's' : '') + ' ouvré' + (joursConge(r.d, r.f) > 1 ? 's' : '') + '</small></div></div>';
     if (moi) pied = '<div class="boutons"><button class="bouton danger" data-action="annuler" data-id="' + h(r.id) + '">Annuler ce congé</button></div>';
   } else {
-    const c = etat.couleurPar === 'personne' ? couleurPersonne(principal.organisateur) : couleurSalle(principal.salle);
+    const c = modeCouleur() === 'personne' ? couleurPersonne(principal.organisateur) : couleurSalle(principal.salle);
     const p = invites(principal);
     const rep = typeRepetition(principal.serie);
     corps = '<div class="detail-titre"><span class="barre" style="background:' + c + '"></span><div><h2>' + h(principal.objet || principal.salle) + '</h2><p>' + h(majuscule(texteJour(principal.d))) + '</p></div></div>';
@@ -906,7 +925,7 @@ function dessinerLieux() {
   const { d, f } = creneauForm();
   zone.innerHTML = lieuxReservables().map(s => {
     const pris = d && f ? occupants(s.nom, d, f, idsModifies()).length > 0 : false;
-    return '<button class="lieu' + (memeNom(form.salle, s.nom) ? ' actif' : '') + (pris ? ' occupe' : '') + '" style="--lieu:' + h(s.couleur || couleurAuto(s.nom)) + '" data-action="lieu" data-salle="' + h(s.nom) + '"><i style="background:' + h(s.couleur || couleurAuto(s.nom)) + '"></i>' + h(s.nom) + (pris ? ' <small>occupée</small>' : '') + '</button>';
+    return '<button class="lieu' + (memeNom(form.salle, s.nom) ? ' actif' : '') + (pris ? ' occupe' : '') + '" style="--lieu:' + h(couleurSalle(s.nom)) + '" data-action="lieu" data-salle="' + h(s.nom) + '"><i style="background:' + h(couleurSalle(s.nom)) + '"></i>' + h(s.nom) + (pris ? ' <small>occupée</small>' : '') + '</button>';
   }).join('');
 }
 
@@ -1263,7 +1282,7 @@ document.addEventListener('change', async e => {
       etat.d.reglages = r;
       toast('Enregistré', 'ok');
       afficher();
-    } else if (quoi === 'couleurs') { etat.couleurPar = el.value; memo.ecrire('couleurPar', el.value); afficher(); }
+    } else if (quoi === 'couleurs') { etat.modeCouleurs = el.value; memo.ecrire('modeCouleurs', el.value || null); afficher(); }
     else if (quoi === 'weekend') { etat.weekend = el.checked; memo.ecrire('weekend', el.checked ? 'oui' : 'non'); afficher(); }
   } catch (err) { toast(err.message, 'erreur'); afficher(); }
 });
